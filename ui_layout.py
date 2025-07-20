@@ -7,7 +7,7 @@ from functools import partial
 
 from data_util import normalize_row
 from leveldb_wrapper import LevelDBWrapper
-from viewer_controller import init_controllers, on_select
+from viewer_controller import init_controllers, on_select, select_log_dir
 import viewer_controller
 
 notebook = None
@@ -15,36 +15,36 @@ root = None
 # tree = None
 g_wrapper = None
 
-def delete_all_nodes(tree_obj):
-    try:
-        for i in tree_obj.get_children():
-            tree_obj.delete(i)
-    except:
-        pass
+# def delete_all_nodes(tree_obj):
+#     try:
+#         for i in tree_obj.get_children():
+#             tree_obj.delete(i)
+#     except:
+#         pass
 
-def select_log_dir(event=None, param=''):
-    """
-    :param event: event arg (not used)
-    """
-    global tree
-    file_path = filedialog.askdirectory(
-        initialdir = '',
-        title='Select IndexedDB Directory')
-    (wrapper, db) = LevelDBWrapper().load(file_path)
-    g_wrapper = wrapper
-    try:
-        # TreeView 구성
-        delete_all_nodes(tree)
-        for db_name, tables in db.items():
-            db_node = tree.insert("", "end", text=db_name)
-            if isinstance(tables, dict):
-                table_keys = tables.keys()
-            else:
-                table_keys = tables
-            for table_name in table_keys:
-                tree.insert(db_node, "end", text=f"{db_name}.{table_name}")
-    except:
-        pass
+# def select_log_dir(event=None, param=''):
+#     """
+#     :param event: event arg (not used)
+#     """
+#     global tree
+#     file_path = filedialog.askdirectory(
+#         initialdir = '',
+#         title='Select IndexedDB Directory')
+#     (wrapper, db) = LevelDBWrapper().load(file_path)
+#     g_wrapper = wrapper
+#     try:
+#         # TreeView 구성
+#         delete_all_nodes(tree)
+#         for db_name, tables in db.items():
+#             db_node = tree.insert("", "end", text=db_name)
+#             if isinstance(tables, dict):
+#                 table_keys = tables.keys()
+#             else:
+#                 table_keys = tables
+#             for table_name in table_keys:
+#                 tree.insert(db_node, "end", text=f"{db_name}.{table_name}")
+#     except:
+#         pass
 
 def save_json_to_file(text_widget):
     import tkinter.filedialog as fd
@@ -91,30 +91,7 @@ def show_cell_popup(content):
 
     btn = tk.Button(popup, text="닫기", command=popup.destroy)
     btn.pack(pady=5)
-
-def remove_tabs():
-    '''
-    # 기존 탭 모두 제거
-    '''
-    for tab_id in notebook.tabs():
-        if tab_id.split('.')[-1] != '!frame':
-            notebook.forget(tab_id)
-            
-def create_table_tab(schema: tuple, rows: list, index: int):
-    # global notebook
-    frame = tk.Frame(notebook)
-    new_sheet = Sheet(frame, headers=list(schema))
-    new_sheet.pack(fill="both", expand=True)
-
-    new_sheet.enable_bindings((
-        "single_select", "cell_select", "column_width_resize", "cell_double_click"
-    ))
-
-    table_data = [normalize_row(row, list(schema)) for row in rows]
-    new_sheet.set_sheet_data(table_data)
-
-    notebook.add(frame, text=f"Table-{index+1}")
-    
+           
 def create_ui(db_data='', gen=''):
     # global root, table_view, json_view, tree, sheet
     global tree
@@ -125,14 +102,6 @@ def create_ui(db_data='', gen=''):
     # 상단 메뉴바 생성
     menubar = tk.Menu(root)
     root.config(menu=menubar)
-
-    file_menu = tk.Menu(menubar, tearoff=0)
-    menubar.add_cascade(label="File", menu=file_menu)
-    # 메뉴에 연결
-    file_menu.add_command(label="Open Directory (for TreeView)", accelerator='Ctrl+T',
-                            command=lambda: select_log_dir(param="tree"))
-    file_menu.add_separator()
-    file_menu.add_command(label="종료", command=root.quit)
 
     # ▶ 좌우 분할 PanedWindow
     main_pane = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashrelief="raised")
@@ -147,6 +116,14 @@ def create_ui(db_data='', gen=''):
     # 오른쪽 패널 - Notebook 등 기존 구성
     right_frame = ttk.Frame(main_pane)
     main_pane.add(right_frame)
+
+    file_menu = tk.Menu(menubar, tearoff=0)
+    menubar.add_cascade(label="File", menu=file_menu)
+    # 메뉴에 연결
+    file_menu.add_command(label="Open Directory (for TreeView)", accelerator='Ctrl+T',
+                            command=lambda: select_log_dir(param=tree))
+    file_menu.add_separator()
+    file_menu.add_command(label="종료", command=root.quit)
 
     ###############################################################
     # 👉 윗줄에 버튼을 담을 frame
@@ -201,7 +178,7 @@ def create_ui(db_data='', gen=''):
     except:
         pass
 
-    tree.bind("<<TreeviewSelect>>", partial(on_select, root, db_data, gen))
     init_controllers(_tree = tree, _json_view=json_view, _table_view=table_view)
+    tree.bind("<<TreeviewSelect>>", partial(on_select, root, db_data)) #, gen))
     root.mainloop()
     

@@ -46,7 +46,7 @@ class LevelDBWrapper:
             dict_table[f'{name[0]}'] = wrapper[name[0]]._obj_store_names
         return (wrapper, dict_table)
     
-    def _make_batch_gen(generator, batch_size=10):
+    def _make_batch_gen(self, generator, batch_size=10):
             batch = []
             for item in generator:
                 batch.append(item)
