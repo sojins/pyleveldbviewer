@@ -7,6 +7,8 @@ from tkinter import filedialog
 from tksheet import Sheet
 from functools import partial
 from ccl_chromium_reader import ccl_chromium_indexeddb
+ 
+# TODO: list string 표시
 
 # 샘플 DB 구조
 sample_db = {
@@ -338,16 +340,6 @@ def create_ui(db_data, gen):
     right_frame = ttk.Frame(main_pane)
     main_pane.add(right_frame)
 
-    # # 좌측: DB, 테이블 선택
-    # left_frame = ttk.Frame(root, width=200)
-    # left_frame.pack(side="left", fill="y")
-    # tree = ttk.Treeview(left_frame)
-    # tree.pack(fill="both", expand=True)
-
-    # # 우측: 테이블 데이터 보기
-    # right_frame = ttk.Frame(root)
-    # right_frame.pack(side="right", fill="both", expand=True)
-
     ###############################################################
     # 👉 윗줄에 버튼을 담을 frame
     top_frame = tk.Frame(right_frame)
@@ -460,6 +452,4 @@ class LevelDBWrapper:
 if __name__ == "__main__":
     global initial_dir
     initial_dir = r'G:\Supports\25.07.16_TelegramWeb_LevelDB\Google_Chrome\IndexedDB'
-
-    # (wrapper, db) = LevelDBWrapper().load(r'G:\Supports\25.07.16_TelegramWeb_LevelDB\Google_Chrome\IndexedDB')
     create_ui(db_data=None, gen=None)
