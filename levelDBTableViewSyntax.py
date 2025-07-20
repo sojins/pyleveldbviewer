@@ -7,6 +7,8 @@ from tkinter import filedialog
 from tksheet import Sheet
 from functools import partial
 from ccl_chromium_reader import ccl_chromium_indexeddb
+
+from json_util import make_cell_safe, make_json_safe, highlight_keys_fast
  
 # TODO: list string 표시
 
@@ -45,45 +47,7 @@ def extract_table_data(json_data):
             return columns, rows
     return [], []
 
-def highlight_keys_fast(text_widget):
-    text_widget.tag_configure("key", foreground="blue")
 
-    # 전체 줄 수 가져오기
-    total_lines = int(text_widget.index("end-1c").split('.')[0])
-
-    for lineno in range(1, total_lines + 1):
-        line = text_widget.get(f"{lineno}.0", f"{lineno}.end")
-
-        # "key": 패턴 찾기
-        for match in re.finditer(r'"(.*?)"\s*:', line):
-            start_idx = f"{lineno}.{match.start(1)}"
-            end_idx = f"{lineno}.{match.end(1)}"
-            text_widget.tag_add("key", start_idx, end_idx)
-
-# def highlight_json(text_widget, json_str):
-#     text_widget.delete("1.0", "end")
-#     text_widget.insert("1.0", json_str)
-
-#     text_widget.tag_config("key", foreground="purple")
-#     text_widget.tag_config("string", foreground="green")
-#     text_widget.tag_config("number", foreground="blue")
-#     text_widget.tag_config("bool", foreground="orange")
-#     text_widget.tag_config("null", foreground="gray")
-
-#     for match in re.finditer(r'"(.*?)"\s*:', json_str):
-#         text_widget.tag_add("key", f"1.0+{match.start()}c", f"1.0+{match.end(1)+1}c")
-
-#     for match in re.finditer(r':\s*"(.*?)"', json_str):
-#         text_widget.tag_add("string", f"1.0+{match.start(1)}c", f"1.0+{match.end(1)}c")
-
-#     for match in re.finditer(r':\s*(\d+)', json_str):
-#         text_widget.tag_add("number", f"1.0+{match.start(1)}c", f"1.0+{match.end(1)}c")
-
-#     for match in re.finditer(r':\s*(true|false)', json_str):
-#         text_widget.tag_add("bool", f"1.0+{match.start(1)}c", f"1.0+{match.end(1)}c")
-
-#     for match in re.finditer(r':\s*(null)', json_str):
-#         text_widget.tag_add("null", f"1.0+{match.start(1)}c", f"1.0+{match.end(1)}c")
 
 def save_json_to_file(text_widget):
     import tkinter.filedialog as fd
@@ -207,36 +171,6 @@ def _make_batch_gen(generator, batch_size=10):
                 batch = []
         if batch:
             yield batch
-
-def make_json_safe(obj):
-    def default(o):
-        if isinstance(o, bytes):
-            return o.decode('utf-8', errors='replace')  # 또는 base64 인코딩
-        return str(o)
-    return json.dumps(obj, indent=2, ensure_ascii=False, default=default)
-
-def make_cell_safe(value):
-    """테이블 셀에 안전하게 표시할 값으로 변환"""
-    def default(o):
-        if isinstance(o, bytes):
-            try:
-                return o.decode('utf-8', errors='replace')
-            except:
-                return str(o)
-        return str(o)
-    if isinstance(value, (dict, list)):
-        try:
-            avalue = json.dumps(value, ensure_ascii=False, indent=None, default=default)
-            return avalue 
-        except Exception:
-            avalue = make_json_safe(value)
-            return avalue
-    elif isinstance(value, bytes):
-        return value.decode('utf-8', errors='replace')  # 또는 base64.b64encode(value).decode()
-    elif value is None:
-        return ""
-    else:
-        return str(value)
     
 # 선택 시 데이터 렌더링
 def on_select(root, db_data, wrapper, event):
