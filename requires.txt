@@ -1,0 +1,8 @@
+Brotli==1.1.0
+ccl_chromium_reader @ git+http://172.16.10.125:8800/project/forensics/PythonUtil/ccl_chromium_reader.git@d325f5f6ffe89d91ff8136af49079185e926aa02
+customtkinter==5.2.2
+darkdetect==0.8.0
+packaging==25.0
+pillow==10.4.0
+tksheet==7.5.12
+ttkbootstrap==1.14.1
