@@ -8,8 +8,11 @@ from data_util import normalize_row
 from json_util import highlight_keys_fast, make_json_safe
 from leveldb_wrapper import LevelDBWrapper
 
+CELL_TEXT_LIMIT = 256
+
 table_batch_dict = {}
 ui = {}  # UI context 전역 dict
+cell_full_data = {}  # (row, col) → full string 저장용
 
 def init_controllers(tree_widget, json_widget, notebook_widget, root, progressbar):
     ui["tree"] = tree_widget
@@ -19,6 +22,26 @@ def init_controllers(tree_widget, json_widget, notebook_widget, root, progressba
     ui["progressbar"] = progressbar
     # TreeView 이벤트 바인딩
     ui["tree"].bind("<<TreeviewSelect>>", on_select)
+
+def make_cell_summary(value, row, col):
+    if isinstance(value, str) and len(value) > CELL_TEXT_LIMIT:
+        cell_full_data[(row, col)] = value
+        return value[:CELL_TEXT_LIMIT] + "…"
+    return value
+
+def update_table_view(sheet, cols, rows):
+    sheet.headers(cols)
+    cell_full_data.clear()
+
+    summarized_rows = []
+    for row_idx, row in enumerate(rows):
+        summarized_row = []
+        for col_idx, cell in enumerate(row):
+            summarized = make_cell_summary(cell, row_idx, col_idx)
+            summarized_row.append(summarized)
+        summarized_rows.append(summarized_row)
+
+    sheet.set_sheet_data(summarized_rows)
 
 def on_cell_double_click(event):
     mt = event.widget  # sheet.MT (MainTable)
@@ -30,8 +53,18 @@ def on_cell_double_click(event):
     if row is None or col is None:
         return
 
-    value = sheet.get_cell_data(row, col)
-    show_cell_hex_popup(value, master=sheet.winfo_toplevel())
+    try:
+        row_idx, col_idx = int(row), int(col)
+        full_value = cell_full_data.get((row_idx, col_idx))
+
+        if full_value:
+            show_cell_hex_popup(full_value)
+        else:
+            # 요약 안 된 셀은 그대로 표시
+            value = sheet.get_cell_data(row_idx, col_idx)
+            show_cell_hex_popup(value)
+    except Exception as e:
+        print("Error in double click:", e)
 
 def show_cell_popup(content, master=None):
     popup = tk.Toplevel(master) if master else tk.Toplevel()
@@ -143,7 +176,8 @@ def on_data_loaded(wrapper, db, file_path):
         else:
             table_keys = tables
         for table_name in table_keys:
-            tree.insert(db_node, "end", text=f"{db_name}.{table_name}")
+            # table인 경우 values에 이름 저장
+            tree.insert(db_node, "end", text=f"{db_name}.{table_name}", values=(db_name, table_name))
         
         # 폴더 경로 표시
         root_window = ui["root"]
@@ -222,9 +256,12 @@ def on_select(event):
     json_view = ui["json_view"]
     
     text = tree.item(sel[0], "text")
-    if "." not in text:
+    try:
+        # values에서 조회하도록 변경 - '.' 이 포함된 dbname 지원
+        db_name, table_name = tree.item(sel[0], "value")
+    except ValueError:
         return
-    
+
     # 로딩바 시작
     progressbar = ui["progressbar"]
     if progressbar:
@@ -233,7 +270,6 @@ def on_select(event):
     
     def task():
         try:
-            db_name, table_name = text.split(".", 1)
             data = []
             create_first_gen = False
 
@@ -265,11 +301,9 @@ def on_select(event):
                         table_batch_dict[text] = _batch_gen
                         batch = next(_batch_gen)
                     except StopIteration:
-                        print("⚠️ No data!")
-                        return
+                        raise ValueError("⚠️ No data!")
                 else:
-                    print("⚠️ No data!")
-                    return
+                    raise ValueError("⚠️ No data!")
 
             # 4️⃣ 스키마별 그룹핑
             schema_groups = {}
@@ -289,7 +323,9 @@ def on_select(event):
             # 6️⃣ JSON 뷰어 갱신
             pretty = make_json_safe(data)
             json_view.after(0, lambda: update_json_view(json_view, pretty))
-
+        except ValueError:
+            print("⚠️ No data!")
+            clear_tabs_and_jsonview()
         finally:
             # 7️ 로딩바 종료 (UI 스레드에서)
             progressbar.after(0, lambda: (
@@ -297,6 +333,9 @@ def on_select(event):
                 progressbar.pack_forget()
             ))
 
+    def clear_tabs_and_jsonview():
+        remove_tabs()
+        update_json_view(json_view, '')
 
     def update_json_view(view, text):
         view.delete("1.0", "end")
@@ -309,7 +348,6 @@ def view_table_new_cb(root, wrapper, db_name=None, table_name=None):
     if not db_name or not table_name:
         return
     
-    # db = wrapper[db_name]
     obj_store = wrapper[db_name][table_name]  # accessing object store using name
     
     record_iter = obj_store.iterate_records(errors_to_stdout=True)
