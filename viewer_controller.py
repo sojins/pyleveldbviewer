@@ -47,7 +47,7 @@ def show_cell_popup(content, master=None):
 def show_cell_hex_popup(content, master=None):
     popup = tk.Toplevel(master) if master else tk.Toplevel()
     popup.title("셀 상세 보기")
-    popup.geometry("1000x500")
+    popup.geometry("1300x500")
 
     # ▶ 좌우 분할 PanedWindow
     main_pane = ttk.PanedWindow(popup, orient=tk.HORIZONTAL)

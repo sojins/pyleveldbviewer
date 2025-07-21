@@ -39,7 +39,7 @@ def create_ui(db_data='', gen=''):
     global tree
     root = tk.Tk()
     root.title("DB > Table Viewer with JSON Highlight")
-    root.geometry("1000x600")
+    root.geometry("1300x600")
 
     # 상단 메뉴바 생성
     menubar = tk.Menu(root)
@@ -49,10 +49,24 @@ def create_ui(db_data='', gen=''):
     main_pane = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashrelief="raised")
     main_pane.pack(fill="both", expand=True)
 
-    # 왼쪽 패널 - TreeView
-    left_frame = ttk.Frame(main_pane, width=200)
-    tree = ttk.Treeview(left_frame)
-    tree.pack(fill="both", expand=True)
+    # 왼쪽 패널 - TreeView + scrollbar
+    left_frame = ttk.Frame(main_pane, width=250)
+
+    # 내부 컨테이너 (TreeView + Scrollbar 묶음)
+    tree_container = ttk.Frame(left_frame)
+    tree_container.pack(fill="both", expand=True)
+    
+    # 수직 스크롤바
+    tree_scrollbar = ttk.Scrollbar(tree_container, orient="vertical")
+
+    tree = ttk.Treeview(tree_container, yscrollcommand=tree_scrollbar.set)
+    tree_scrollbar.config(command=tree.yview)
+
+    # 배치
+    tree_scrollbar.pack(side="right", fill="y")
+    tree.pack(side="left", fill="both", expand=True)
+    
+    # 전체 왼쪽 프레임을 PanedWindow에 추가
     main_pane.add(left_frame, minsize=150)  # 최소 너비 설정
 
     # 오른쪽 패널 - Notebook 등 기존 구성
