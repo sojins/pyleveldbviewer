@@ -1,3 +1,4 @@
+from threading import Thread
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import ttk
@@ -10,11 +11,12 @@ from leveldb_wrapper import LevelDBWrapper
 table_batch_dict = {}
 ui = {}  # UI context 전역 dict
 
-def init_controllers(tree_widget, json_widget, notebook_widget, root):
+def init_controllers(tree_widget, json_widget, notebook_widget, root, progressbar):
     ui["tree"] = tree_widget
     ui["json_view"] = json_widget
     ui["notebook"] = notebook_widget
     ui["root"] = root
+    ui["progressbar"] = progressbar
     # TreeView 이벤트 바인딩
     ui["tree"].bind("<<TreeviewSelect>>", on_select)
 
@@ -128,6 +130,30 @@ def delete_all_nodes(tree_obj):
     except:
         pass
     
+def on_data_loaded(wrapper, db, file_path):
+    ui['wrapper'] = wrapper
+    tree = ui['tree']
+
+    # TreeView 구성
+    delete_all_nodes(tree)
+    for db_name, tables in db.items():
+        db_node = tree.insert("", "end", text=db_name)
+        if isinstance(tables, dict):
+            table_keys = tables.keys()
+        else:
+            table_keys = tables
+        for table_name in table_keys:
+            tree.insert(db_node, "end", text=f"{db_name}.{table_name}")
+        
+        # 폴더 경로 표시
+        root_window = ui["root"]
+        if root_window:
+            root_window.title(f"LevelDB Viewer - {file_path}")
+    remove_tabs()
+    json_view = ui["json_view"]
+    if json_view:
+        json_view.delete("1.0", "end")       # 기존 내용 지우기
+
 def select_log_dir(event=None, param=None):
     """
     :param event: event arg (not used)
@@ -136,31 +162,25 @@ def select_log_dir(event=None, param=None):
     file_path = filedialog.askdirectory(
         initialdir = '',
         title='Select IndexedDB Directory')
-    (wrapper, db) = LevelDBWrapper().load(file_path)
-    ui['wrapper'] = wrapper
-    try:
-        # TreeView 구성
-        delete_all_nodes(tree)
-        for db_name, tables in db.items():
-            db_node = tree.insert("", "end", text=db_name)
-            if isinstance(tables, dict):
-                table_keys = tables.keys()
-            else:
-                table_keys = tables
-            for table_name in table_keys:
-                tree.insert(db_node, "end", text=f"{db_name}.{table_name}")
-            
-            # 폴더 경로 표시
-            root_window = ui["root"]
-            if root_window:
-                root_window.title(f"LevelDB Viewer - {file_path}")
-        remove_tabs()
-        json_view = ui["json_view"]
-        if json_view:
-            json_view.delete("1.0", "end")       # 기존 내용 지우기
+    
+    if not file_path:
+        return
+    progressbar = ui["progressbar"]
+    progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
+    progressbar.start(10)
 
-    except:
-        pass
+    def task():
+        try:
+            wrapper_obj = LevelDBWrapper()
+            wrapper_obj.load_data_with_progress(progressbar, 
+                                                file_path,
+                                                callback=on_data_loaded) # lambda w, db: on_data_loaded(w, db, file_path))
+        except:
+            pass
+        finally:
+            progressbar.stop()
+            progressbar.pack_forget()
+    Thread(target=task).start()
 
 def remove_tabs():
     '''
@@ -192,65 +212,98 @@ def create_table_tab(schema: tuple, rows: list, index: int):
                 
 # 선택 시 데이터 렌더링
 def on_select(event): 
-    wrapper = ui['wrapper']
     tree = event.widget
-    root = event.widget.master
-    json_view = ui["json_view"]
     sel = tree.selection()
     if not sel:
         return
+    
+    wrapper = ui['wrapper']
+    root = event.widget.master
+    json_view = ui["json_view"]
+    
     text = tree.item(sel[0], "text")
     if "." not in text:
         return
-    db_name, table_name = text.split(".", 1)
-    create_first_gen = False
-    batch = []
-    try:
-        gen = view_table_new_cb(root, wrapper, db_name, table_name)
-    except:
-        print("Generation failed!")
-        return
-    try:
-        if _batch_gen is None or table_batch_dict.get(text) is None:
-            table_batch_dict[text] = _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
-            create_first_gen = True
-    except NameError:
-        table_batch_dict[text] = _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
-        create_first_gen = True
-    try:
-        batch = next(_batch_gen)
-    except StopIteration:
-        try:
-            if not create_first_gen:
-                table_batch_dict[text] = _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
-                batch = next(_batch_gen)
-            else:
-                print("No data!")
-        except:
-            pass
-    data = []
-    # 📌 스키마별 그룹핑
-    schema_groups = {}
-    for item in batch:
-        data.append(item)
-        try:
-            schema = tuple(sorted(item.keys())) # 스키마 식별자
-        except:
-            schema = ('')
-        schema_groups.setdefault(schema, []).append(item)
-
-    remove_tabs()
     
-    # 그룹마다 새 탭 생성
-    for i, (schema, rows) in enumerate(schema_groups.items()):
-        create_table_tab(schema, rows, i)
+    # 로딩바 시작
+    progressbar = ui["progressbar"]
+    if progressbar:
+        progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
+        progressbar.start(10)
+    
+    def task():
+        try:
+            db_name, table_name = text.split(".", 1)
+            data = []
+            create_first_gen = False
 
-    pretty = make_json_safe(data)
+            # 1️⃣ 테이블 제너레이터 준비
+            try:
+                gen = view_table_new_cb(root, wrapper, db_name, table_name)
+            except Exception as e:
+                print(f"⚠️ Generation failed: {e}")
+                return
 
-    # highlight_json(json_view, pretty)
-    json_view.delete("1.0", "end")       # 기존 내용 지우기
-    json_view.insert("1.0", pretty)
-    highlight_keys_fast(json_view)
+            # 2️⃣ 배치 제너레이터 준비 (10개 단위)
+            try:
+                if _batch_gen is None or table_batch_dict.get(text) is None:
+                    _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
+                    table_batch_dict[text] = _batch_gen
+                    create_first_gen = True
+            except NameError:
+                _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
+                table_batch_dict[text] = _batch_gen
+                create_first_gen = True
+
+            # 3️⃣ 첫 배치 로드
+            try:
+                batch = next(_batch_gen)
+            except StopIteration:
+                if not create_first_gen:
+                    try:
+                        _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
+                        table_batch_dict[text] = _batch_gen
+                        batch = next(_batch_gen)
+                    except StopIteration:
+                        print("⚠️ No data!")
+                        return
+                else:
+                    print("⚠️ No data!")
+                    return
+
+            # 4️⃣ 스키마별 그룹핑
+            schema_groups = {}
+            for item in batch:
+                data.append(item)
+                try:
+                    schema = tuple(sorted(item.keys()))
+                except Exception:
+                    schema = ('',)
+                schema_groups.setdefault(schema, []).append(item)
+
+            # 5️⃣ 기존 탭 제거 후 새 탭 생성
+            remove_tabs()
+            for i, (schema, rows) in enumerate(schema_groups.items()):
+                create_table_tab(schema, rows, i)
+
+            # 6️⃣ JSON 뷰어 갱신
+            pretty = make_json_safe(data)
+            json_view.after(0, lambda: update_json_view(json_view, pretty))
+
+        finally:
+            # 7️ 로딩바 종료 (UI 스레드에서)
+            progressbar.after(0, lambda: (
+                progressbar.stop(),
+                progressbar.pack_forget()
+            ))
+
+
+    def update_json_view(view, text):
+        view.delete("1.0", "end")
+        view.insert("1.0", text)
+        highlight_keys_fast(view)
+
+    Thread(target=task).start()
         
 def view_table_new_cb(root, wrapper, db_name=None, table_name=None):
     if not db_name or not table_name:

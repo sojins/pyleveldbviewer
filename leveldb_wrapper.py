@@ -1,4 +1,6 @@
 import os
+from threading import Thread
+from ttkbootstrap.widgets import Meter, Progressbar
 from ccl_chromium_reader import ccl_chromium_indexeddb
 
 class LevelDBWrapper:
@@ -30,7 +32,7 @@ class LevelDBWrapper:
         (blob_dir, db_dir) = self.find_indexeddb_components(base_dir)
         (wrapper, db_names) = self.load_data(db_dir=db_dir, blob_dir=blob_dir)
 
-        return wrapper, db_names
+        return (wrapper, db_names)
 
     def load_data(self, db_dir, blob_dir):
         leveldb_folder_path = db_dir
@@ -46,6 +48,21 @@ class LevelDBWrapper:
             dict_table[f'{name[0]}'] = wrapper[name[0]]._obj_store_names
         return (wrapper, dict_table)
     
+    def load_data_with_progress(self, progressbar:Progressbar, folder_path, callback):
+        progressbar.start(10)  # 10ms마다 움직임
+
+        def task():
+            try:
+                (wrapper, db_names) = self.load(folder_path)
+                callback(wrapper, db_names, folder_path)
+            except Exception as e:
+                print("예외: ", e)
+            finally:
+                progressbar.stop()
+                progressbar.pack_forget()
+        
+        Thread(target=task).start()
+        
     def _make_batch_gen(self, generator, batch_size=10):
             batch = []
             for item in generator:

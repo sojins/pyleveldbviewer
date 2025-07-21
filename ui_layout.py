@@ -104,6 +104,11 @@ def create_ui(root:ttk.Window):
     json_view = ScrolledText(json_frame, font=("Consolas", 11), wrap="none") # tk.Text(json_frame, font=("Consolas", 11), wrap="none", yscrollcommand=scrollbar.set)
     json_view.pack(side="left", expand=True, fill="both")
 
-    init_controllers(tree, json_view, notebook, root=root)
+    # Progress bar
+    progressbar = ttk.Progressbar(right_frame, mode="indeterminate", bootstyle="info-striped")
+    progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
+    progressbar.pack_forget()  # 초기에는 감추기
+
+    init_controllers(tree, json_view, notebook, root=root, progressbar=progressbar)
     root.mainloop()
     
