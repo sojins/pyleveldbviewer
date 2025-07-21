@@ -10,11 +10,11 @@ from leveldb_wrapper import LevelDBWrapper
 table_batch_dict = {}
 ui = {}  # UI context 전역 dict
 
-def init_controllers(tree_widget, json_widget, notebook_widget):
+def init_controllers(tree_widget, json_widget, notebook_widget, root):
     ui["tree"] = tree_widget
     ui["json_view"] = json_widget
     ui["notebook"] = notebook_widget
-
+    ui["root"] = root
     # TreeView 이벤트 바인딩
     ui["tree"].bind("<<TreeviewSelect>>", on_select)
 
@@ -47,7 +47,7 @@ def show_cell_popup(content, master=None):
 def show_cell_hex_popup(content, master=None):
     popup = tk.Toplevel(master) if master else tk.Toplevel()
     popup.title("셀 상세 보기")
-    popup.geometry("1300x500")
+    popup.geometry("1300x600")
 
     # ▶ 좌우 분할 PanedWindow
     main_pane = ttk.PanedWindow(popup, orient=tk.HORIZONTAL)
@@ -149,6 +149,11 @@ def select_log_dir(event=None, param=None):
                 table_keys = tables
             for table_name in table_keys:
                 tree.insert(db_node, "end", text=f"{db_name}.{table_name}")
+            
+            # 폴더 경로 표시
+            root_window = ui["root"]
+            if root_window:
+                root_window.title(f"LevelDB Viewer - {file_path}")
         remove_tabs()
         json_view = ui["json_view"]
         if json_view:
@@ -220,7 +225,7 @@ def on_select(event):
                 table_batch_dict[text] = _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
                 batch = next(_batch_gen)
             else:
-                print("Do data!")
+                print("No data!")
         except:
             pass
     data = []
