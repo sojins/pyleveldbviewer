@@ -1,50 +1,13 @@
-import json
 import tkinter as tk
 from tkinter import ttk
-from tkinter import filedialog
-from tksheet import Sheet
-from functools import partial
 
-from data_util import normalize_row
-from leveldb_wrapper import LevelDBWrapper
-from viewer_controller import init_controllers, on_select, select_log_dir
-import viewer_controller
+from viewer_controller import init_controllers, select_log_dir
+
 
 notebook = None
 root = None
-# tree = None
 g_wrapper = None
 
-# def delete_all_nodes(tree_obj):
-#     try:
-#         for i in tree_obj.get_children():
-#             tree_obj.delete(i)
-#     except:
-#         pass
-
-# def select_log_dir(event=None, param=''):
-#     """
-#     :param event: event arg (not used)
-#     """
-#     global tree
-#     file_path = filedialog.askdirectory(
-#         initialdir = '',
-#         title='Select IndexedDB Directory')
-#     (wrapper, db) = LevelDBWrapper().load(file_path)
-#     g_wrapper = wrapper
-#     try:
-#         # TreeView 구성
-#         delete_all_nodes(tree)
-#         for db_name, tables in db.items():
-#             db_node = tree.insert("", "end", text=db_name)
-#             if isinstance(tables, dict):
-#                 table_keys = tables.keys()
-#             else:
-#                 table_keys = tables
-#             for table_name in table_keys:
-#                 tree.insert(db_node, "end", text=f"{db_name}.{table_name}")
-#     except:
-#         pass
 
 def save_json_to_file(text_widget):
     import tkinter.filedialog as fd
@@ -71,29 +34,8 @@ def save_json_to_file(text_widget):
             messagebox.showinfo("성공", f"저장 완료: {file_path}")
         except Exception as e:
             messagebox.showerror("오류", f"파일 저장 실패:\n{e}")
-
-def on_cell_double_click(event):
-    sheet = event.widget  # 클릭된 Sheet 인스턴스
-    row = sheet.get_currently_selected()[0]
-    col = sheet.get_currently_selected()[1]
-    value = sheet.get_cell_data(row, col)
-    show_cell_popup(value)
-
-def show_cell_popup(content):
-    popup = tk.Toplevel(root)
-    popup.title("셀 내용 보기")
-    popup.geometry("400x300")
-
-    text = tk.Text(popup, font=("Consolas", 11), wrap="word")
-    text.insert("1.0", str(content))
-    text.config(state="disabled")
-    text.pack(fill="both", expand=True)
-
-    btn = tk.Button(popup, text="닫기", command=popup.destroy)
-    btn.pack(pady=5)
            
 def create_ui(db_data='', gen=''):
-    # global root, table_view, json_view, tree, sheet
     global tree
     root = tk.Tk()
     root.title("DB > Table Viewer with JSON Highlight")
@@ -149,21 +91,6 @@ def create_ui(db_data='', gen=''):
     json_view = tk.Text(json_frame, font=("Consolas", 11), wrap="none", yscrollcommand=scrollbar.set)
     json_view.pack(side="left", expand=True, fill="both")
     scrollbar.config(command=json_view.yview)
-    
-    # table sheet
-    table_view = Sheet(notebook)
-    table_view.enable_bindings((
-        "cell_double_click",
-        "cell_select",
-        "column_select",
-        "column_width_resize",
-        "edit_cell", 
-        "row_select",         
-        "single_select"))
-    notebook.add(table_view, text="Table")
-    # 바인딩 등록
-    table_view.extra_bindings("cell_double_click", on_cell_double_click)
-    sheet = table_view
 
     try:
         # TreeView 구성
@@ -178,7 +105,6 @@ def create_ui(db_data='', gen=''):
     except:
         pass
 
-    init_controllers(_tree = tree, _json_view=json_view, _table_view=table_view)
-    tree.bind("<<TreeviewSelect>>", partial(on_select, root, db_data)) #, gen))
+    init_controllers(tree, json_view, notebook)
     root.mainloop()
     

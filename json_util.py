@@ -1,4 +1,5 @@
 import json
+import re
 
 
 def highlight_keys_fast(text_widget):
