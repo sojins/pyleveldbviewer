@@ -8,24 +8,21 @@ from ttkbootstrap.scrolled import ScrolledText
 
 from data_util import normalize_row
 from json_util import highlight_keys_fast, make_json_safe
-from leveldb_wrapper import LevelDBWrapper, entry_generator
-from controller_state import state
+from leveldb_wrapper import LevelDBWrapper, TableDataManager
+from controller_state import table, ui, cell_full_data
+from constants import PAGE_SIZE, CELL_TEXT_LIMIT
 
-CELL_TEXT_LIMIT = 50
-PAGE_SIZE = 10
 
-ui = {}  # UI context 전역 dict
-cell_full_data = {}  # (row, col) → full string 저장용
 
 def init_controllers(tree_widget, json_widget, notebook_widget, root, progressbar):
-    ui["tree"] = tree_widget
-    ui["json_view"] = json_widget
-    ui["notebook"] = notebook_widget
-    ui["root"] = root
-    ui["progressbar"] = progressbar
+    ui.tree = tree_widget
+    ui.json_view = json_widget
+    ui.notebook = notebook_widget
+    ui.root = root
+    ui.progressbar = progressbar
 
     # TreeView 이벤트 바인딩
-    ui["tree"].bind("<<TreeviewSelect>>", on_select)
+    ui.tree.bind("<<TreeviewSelect>>", on_select)
 
 def make_cell_summary(value, tab_index, row, col):
     if not isinstance(value, str):
@@ -36,59 +33,66 @@ def make_cell_summary(value, tab_index, row, col):
     if total_len > CELL_TEXT_LIMIT:
         cell_full_data.setdefault(tab_index,{})[(row, col)] = value
         summary = value[:CELL_TEXT_LIMIT] + f"… (total: {total_len:,})"
-        return summary
+        return (True, summary)
     
-    return value
+    return (False, value)
 
-def update_table_view(sheet, cols, rows, tab_index=1):
+def render_table_page(sheet: Sheet, cols, rows, tab_index=1):
+    ''' 현재 테이블 페이지를 렌더링 (요약 포함) '''
     sheet.headers(cols)
-    cell_full_data.get(tab_index, {}).clear() # cell_full_data.clear()
+    cell_full_data.get(tab_index, {}).clear()
+
     summarized_rows = []
+    summary_cells = []
     for row_idx, row in enumerate(rows):
         summarized_row = []
         for col_idx, cell in enumerate(row):
-            summarized = make_cell_summary(cell, tab_index, row_idx, col_idx)
+            (is_summary, summarized) = make_cell_summary(cell, tab_index, row_idx, col_idx)
+            if is_summary:
+                summary_cells.append((row_idx, col_idx))
             summarized_row.append(summarized)
         summarized_rows.append(summarized_row)
 
     sheet.set_sheet_data(summarized_rows)
 
-# 다음/이전 페이지 요청 처리
+    # 요약 셀은 글자색을 파란색 강조 적용
+    if summary_cells:
+        sheet.highlight_cells(cells=summary_cells, fg=("blue",))
+
 def show_batch_page(direction: str):
-    key = state.get_current_key()
-
-    gen = state.batch_generators.get(key)
-    if not gen:
-        print("⚠️ Generator not found")
-        return
-
-    page = state.batch_pages.get(key, 0)
-    cache = state.batch_cache.setdefault(key, [])
-
-    if direction == "next":
-        if page < len(cache):
-            batch = cache[page]
-        else:
-            try:
-                batch = next(gen)
-                cache.append(batch)
-            except StopIteration:
-                print("Reached end of data")
+    ''' 이전/다음 페이지 요청 처리  (TableDataManager 기반)'''
+    key = table.current_key
+    tdm = table.tdm_map.get(key)
+    
+    progressbar = ui.progressbar
+    progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
+    progressbar.start(10)
+    def task():
+        try:
+            table.prev_btn["state"] = "disabled"
+            table.next_btn["state"] = "disabled"
+            if not tdm:
+                print(f"⚠️ TableDataManager not found for {key}")
                 return
-        state.batch_pages[key] = page + 1
+            
+            if direction == "next":
+                batch = tdm.get_next_page()
+                if not batch:
+                    print("Reached end of data")
+                    return
 
-    elif direction == "prev":
-        if page > 1:
-            state.batch_pages[key] = page - 1
-            batch = cache[page - 2]  # 이전 페이지 (0-indexed)
-        else:
-            print("At beginning")
-            return
-    else:
-        return
-
-    update_table_and_json(batch)
-    update_page_label()
+            elif direction == "prev":
+                batch = tdm.get_prev_page()
+                if not batch:
+                    print("At beginning")
+                    return
+        finally:
+            update_table_and_json(batch)
+            update_page_label()
+            
+            progressbar.stop()
+            progressbar.pack_forget()
+    Thread(target=task).start()
 
 def update_table_and_json(batch):
     schema_groups = {}
@@ -99,30 +103,33 @@ def update_table_and_json(batch):
     for i, (schema, rows) in enumerate(schema_groups.items()):
         create_table_tab(schema, rows, i)
 
-    json_view = ui["json_view"]
+    json_view = ui.json_view
     json_view.delete("1.0", "end")
     json_view.insert("1.0", make_json_safe(batch))
     highlight_keys_fast(json_view)
 
-def get_total_pages(tdm):
+def get_total_pages(tdm: TableDataManager):
     total_records = tdm.count_total()
     total_pages = (total_records + PAGE_SIZE - 1) // PAGE_SIZE  # 올림
     return total_pages
 
 def update_page_label():
-    key = state.get_current_key()
-    page = state.batch_pages.get(key, 1)
-
-    tdm = state.tdm_map.get(key)
-    total_pages = get_total_pages(tdm) if tdm else "?"
-    label = ""
-    if total_pages != '?': 
-        label = f"Page: {page} / {total_pages}"
-    state.page_label.config(text=label)
+    key = table.current_key
+    tdm = table.tdm_map.get(key)
+    
+    if not tdm:
+        table.page_label.config(text="Page: - / -")
+        return
+    current = tdm.get_current_page_number()
+    total_pages = tdm.count_total()
+    per_page = tdm.batch_size
+    max_page = (total_pages + per_page - 1) // per_page
+    label = f"Page: {current} / {max_page}"
+    table.page_label.config(text=label)
 
     # 버튼 상태 조정
-    state.prev_btn["state"] = "normal" if page > 1 else "disabled"
-    state.next_btn["state"] = "normal" if isinstance(total_pages, int) and page < total_pages else "disabled"    
+    table.prev_btn["state"] = "normal" if current > 1 else "disabled"
+    table.next_btn["state"] = "normal" if isinstance(total_pages, int) and current < max_page else "disabled"    
 
 def on_cell_double_click(event):
     mt = event.widget  # sheet.MT (MainTable)
@@ -245,8 +252,8 @@ def delete_all_nodes(tree_obj):
         pass
     
 def on_data_loaded(wrapper, db, file_path):
-    ui['wrapper'] = wrapper
-    tree = ui['tree']
+    ui.wrapper = wrapper
+    tree = ui.tree
 
     # TreeView 구성
     delete_all_nodes(tree)
@@ -265,11 +272,11 @@ def on_data_loaded(wrapper, db, file_path):
         db_node = tree.insert("", "end", text=f"📁{db_name} ({table_cnt})", tags="db")
         for table_name in table_keys:
             # table인 경우 values에 이름 저장
-            tdm = LevelDBWrapper.TableDataManager(wrapper, db_name, table_name)
+            tdm = TableDataManager(wrapper, db_name, table_name)
             count = tdm.count_total()
 
             key = f"{db_name}.{table_name}"
-            state.tdm_map[key] = tdm
+            table.tdm_map[key] = tdm
             
             tag = "gray" if count == 0 else ""
             tree.insert(db_node, "end", text=f"📄 {table_name} ({count})", 
@@ -277,11 +284,11 @@ def on_data_loaded(wrapper, db, file_path):
                         tags=(tag,"table") if tag else {})
         
         # 폴더 경로 표시
-        root_window = ui["root"]
+        root_window = ui.root
         if root_window:
             root_window.title(f"LevelDB Viewer - {file_path}")
     remove_tabs_and_cache()
-    json_view = ui["json_view"]
+    json_view = ui.json_view
     if json_view:
         json_view.delete("1.0", "end")       # 기존 내용 지우기
     update_page_label()
@@ -297,15 +304,14 @@ def select_log_dir(event=None, param=None):
     
     if not file_path:
         return
-    progressbar = ui["progressbar"]
+    progressbar = ui.progressbar
     progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
     progressbar.start(10)
 
     def task():
         try:
             wrapper_obj = LevelDBWrapper()
-            wrapper_obj.load_data_with_progress(progressbar, 
-                                                file_path,
+            wrapper_obj.load_data_with_progress(file_path,
                                                 callback=on_data_loaded) # lambda w, db: on_data_loaded(w, db, file_path))
         except:
             pass
@@ -315,17 +321,15 @@ def select_log_dir(event=None, param=None):
     Thread(target=task).start()
 
 def remove_tabs_and_cache():
-    '''
-    # 기존 탭 모두 제거
-    '''
-    notebook = ui["notebook"]
+    ''' Sheet 형식으로 추가된 탭 모두 제거 '''
+    notebook = ui.notebook
     for tab_id in notebook.tabs():
         if tab_id.split('.')[-1] != '!frame':
             notebook.forget(tab_id)
     cell_full_data.clear()
 
 def create_table_tab(schema: tuple, rows: list, tab_index: int):
-    notebook = ui["notebook"]
+    notebook = ui.notebook
     frame = tk.Frame(notebook)
     sheet = Sheet(frame, headers=list(schema))
     sheet.pack(fill="both", expand=True)
@@ -335,94 +339,60 @@ def create_table_tab(schema: tuple, rows: list, tab_index: int):
     ))
 
     table_data = [normalize_row(row, list(schema)) for row in rows]
-    # sheet.set_sheet_data(table_data)
-    update_table_view(sheet, cols=list(schema), rows=table_data, tab_index=tab_index)
+    render_table_page(sheet, cols=list(schema), rows=table_data, tab_index=tab_index)
 
     # 바인딩 등록
     sheet.bind("<Double-1>", on_cell_double_click)
     notebook.add(frame, text=f"Table-{tab_index+1}")
-
-def reset_cache_if_key_changed(key: str):
-    if state.get_current_key() != key:
-        # clear cache
-        state.batch_generators[key] = None
-        state.batch_cache[key] = None
-        state.batch_pages[key] = 0
-    state.set_current_key(key)
                 
-# 선택 시 데이터 렌더링
 def on_select(event): 
+    ''' Tree 선택 시 데이터 렌더링 '''
     tree = event.widget
     sel = tree.selection()
     if not sel:
         return
     
-    wrapper = ui['wrapper']
-    root = event.widget.master
-    json_view = ui["json_view"]
+    json_view = ui.json_view
     
     try:
-        # values에서 조회하도록 변경 - '.' 이 포함된 dbname 지원
         db_name, table_name = tree.item(sel[0], "value")
     except ValueError:
         return
 
     # 로딩바 시작
-    progressbar = ui["progressbar"]
-    if progressbar:
-        progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
-        progressbar.start(10)
+    progressbar = ui.progressbar
+    progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
+    progressbar.start(10)
     
     key = f"{db_name}.{table_name}"
-    reset_cache_if_key_changed(key)
+    table.reset_if_key_changed(key)
 
     def task():
         try:
-            data = []
-            create_first_gen = False
-
-            # 1️⃣ 테이블 제너레이터 준비
-            try:
-                gen = state.batch_generators.get(key)
-                if not gen:
-                    _entry = entry_generator(wrapper, db_name, table_name)
-                    gen = LevelDBWrapper()._make_batch_gen(_entry, 10)
-                    create_first_gen = True
-            except Exception as e:
-                print(f"⚠️ Generation failed: {e}")
-                return
-
-            # 2️⃣ 첫 배치 로드
-            try:
-                batch = next(gen)
-                state.batch_cache[key] = [batch] # 첫 페이지 저장
-                state.batch_generators[key] = gen
-                state.batch_pages[key] = 1
-            except StopIteration:
-                if not create_first_gen:
-                    try:
-                        _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
-                        state.batch_generators[key] = _batch_gen
-                        batch = next(_batch_gen)
-                    except StopIteration:
-                        batch = state.batch_cache[key]
-                else:
+            tdm:TableDataManager = table.tdm_map.get(key)
+            # 1️⃣ 첫 페이지 로드
+            if tdm.is_first_page():
+                batch = tdm.get_next_page()
+                if not batch:
                     raise ValueError("⚠️ No data!")
-            # 3️⃣ 스키마별 그룹핑
+            else:
+                batch = tdm.get_current_page_data()
+            
+            # 2️⃣ 뷰 업데이트
             update_table_and_json(batch)
-            # 4️⃣ 페이지 번호 업데이트
             update_page_label()
         except ValueError:
             print("⚠️ No data!")
-            clear_tabs_and_jsonview()
+            reset_view_tabs()
         finally:
-            # 7️ 로딩바 종료 (UI 스레드에서)
+            # 3️⃣ 로딩바 종료 (UI 스레드에서)
             progressbar.after(0, lambda: (
                 progressbar.stop(),
                 progressbar.pack_forget()
             ))
 
-    def clear_tabs_and_jsonview():
+    def reset_view_tabs():
+        ''' JSON 탭의 내용과 테이블 탭을 초기화 '''
         remove_tabs_and_cache()
         update_json_view(json_view, '')
 

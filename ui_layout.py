@@ -6,7 +6,7 @@ import ttkbootstrap as tb # -> from tkinter import ttk
 
 from ui_utils import AutoScrollbar
 from viewer_controller import init_controllers, select_log_dir, show_batch_page
-from controller_state import state
+from controller_state import table
 
 def save_json_to_file(text_widget):
     import tkinter.filedialog as fd
@@ -89,7 +89,7 @@ def create_ui(root:tb.Window):
     file_menu.add_command(label="종료", command=root.quit)
 
     ###############################################################
-    # 👉 윗줄에 버튼을 담을 frame
+    # 👉 아랫줄에 버튼을 담을 frame
     control_frame = tb.Frame(right_frame, **frame_opts)
     control_frame.pack(side="bottom", fill="x")
     
@@ -98,14 +98,14 @@ def create_ui(root:tb.Window):
     save_button.pack(side="right", padx=10, pady=10)
 
     # control_frame 안에 추가
-    state.prev_btn = prev_btn = tb.Button(control_frame, text="◀ 이전", command=lambda: show_batch_page("prev"))
-    state.next_btn = next_btn = tb.Button(control_frame, text="다음 ▶", command=lambda: show_batch_page("next"))
-    state.prev_btn["state"] = "disabled"
-    state.next_btn["state"] = "disabled"
+    table.prev_btn = prev_btn = tb.Button(control_frame, text="◀ 이전", command=lambda: show_batch_page("prev"))
+    table.next_btn = next_btn = tb.Button(control_frame, text="다음 ▶", command=lambda: show_batch_page("next"))
+    table.prev_btn["state"] = "disabled"
+    table.next_btn["state"] = "disabled"
     prev_btn.pack(side="left", padx=10)
     next_btn.pack(side="left", padx=10)
 
-    state.page_label = page_label = tb.Label(control_frame, text="Page: 1")
+    table.page_label = page_label = tb.Label(control_frame, text="Page: 1")
     page_label.pack(side="left", padx=1)
     ###############################################################
  
