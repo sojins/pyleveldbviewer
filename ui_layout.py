@@ -1,14 +1,12 @@
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledText
-from ttkbootstrap import Style
 import tkinter as tk
-import ttkbootstrap as ttk
 from tkinter import PhotoImage
-# from tkinter import ttk
+import ttkbootstrap as tb # -> from tkinter import ttk
 
 from ui_utils import AutoScrollbar
-from viewer_controller import init_controllers, select_log_dir
-
+from viewer_controller import init_controllers, select_log_dir, show_batch_page
+from controller_state import state
 
 def save_json_to_file(text_widget):
     import tkinter.filedialog as fd
@@ -36,7 +34,7 @@ def save_json_to_file(text_widget):
         except Exception as e:
             messagebox.showerror("오류", f"파일 저장 실패:\n{e}")
            
-def create_ui(root:ttk.Window):
+def create_ui(root:tb.Window):
     photo = PhotoImage(file=r'python_leveldb.png')
     root.wm_iconphoto(False, photo)
     # 상단 메뉴바 생성
@@ -47,19 +45,22 @@ def create_ui(root:ttk.Window):
     main_pane = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashrelief="raised")
     main_pane.pack(fill="both", expand=True)
 
+    frame_opts = {"padding": 0, "borderwidth": 0, "relief": "flat"}
+
     # 왼쪽 패널 - TreeView + scrollbar
-    left_frame = ttk.Frame(main_pane, padding=2) # ttk.Frame(main_pane, width=250)
+    left_frame = tb.Frame(main_pane, **frame_opts)
 
     # 내부 컨테이너 (TreeView + Scrollbar 묶음)
-    tree_container = ttk.Frame(left_frame) # ttk.Frame(left_frame)
+    tree_container = tb.Frame(left_frame, **frame_opts)
     tree_container.pack(fill="both", expand=True)
     
     # 수직 스크롤바
     tree_scrollbar = AutoScrollbar(tree_container, orient="vertical")
 
-    tree = ttk.Treeview(tree_container, 
+    tree = tb.Treeview(tree_container, 
                         style="Custom.Treeview",
-                        yscrollcommand=tree_scrollbar.set) # ttk.Treeview(tree_container, yscrollcommand=tree_scrollbar.set)
+                        show="tree",
+                        yscrollcommand=tree_scrollbar.set)
     tree_scrollbar.config(command=tree.yview)
 
     # grid 배치 (scrollbar는 grid_remove/restore용)
@@ -72,10 +73,10 @@ def create_ui(root:ttk.Window):
     main_pane.add(left_frame, minsize=150)  # 최소 너비 설정
 
     # 오른쪽 패널 - Notebook 등 기존 구성
-    right_frame = ttk.Frame(main_pane, padding=2) # ttk.Frame(main_pane)
+    right_frame = tb.Frame(main_pane, **frame_opts)
     main_pane.add(right_frame)
 
-    notebook = ttk.Notebook(right_frame, bootstyle="primary") # ttk.Notebook(right_frame)
+    notebook = tb.Notebook(right_frame, bootstyle="primary", padding=0)
     notebook.pack(fill="both", expand=True)
 
     file_menu = tk.Menu(menubar, tearoff=0)
@@ -89,26 +90,37 @@ def create_ui(root:ttk.Window):
 
     ###############################################################
     # 👉 윗줄에 버튼을 담을 frame
-    top_frame = ttk.Frame(right_frame)
-    top_frame.pack(side="top", fill="x")
+    control_frame = tb.Frame(right_frame, **frame_opts)
+    control_frame.pack(side="bottom", fill="x")
     
     # 저장 버튼
-    save_button = tk.Button(top_frame, text="저장", command=lambda: save_json_to_file(json_view))
-    save_button.pack(side="right", padx=10, pady=5)
+    save_button = tk.Button(control_frame, text="저장", command=lambda: save_json_to_file(json_view))
+    save_button.pack(side="right", padx=10, pady=10)
+
+    # control_frame 안에 추가
+    state.prev_btn = prev_btn = tb.Button(control_frame, text="◀ 이전", command=lambda: show_batch_page("prev"))
+    state.next_btn = next_btn = tb.Button(control_frame, text="다음 ▶", command=lambda: show_batch_page("next"))
+    state.prev_btn["state"] = "disabled"
+    state.next_btn["state"] = "disabled"
+    prev_btn.pack(side="left", padx=10)
+    next_btn.pack(side="left", padx=10)
+
+    state.page_label = page_label = tb.Label(control_frame, text="Page: 1")
+    page_label.pack(side="left", padx=1)
     ###############################################################
  
     # json frame - scrolled text
-    json_frame = ttk.Frame(notebook) # tk.Frame(notebook)
+    json_frame = tb.Frame(notebook, **frame_opts)
     notebook.add(json_frame, text="JSON")
     
-    json_view = ScrolledText(json_frame, font=("Consolas", 11), wrap="none") # tk.Text(json_frame, font=("Consolas", 11), wrap="none", yscrollcommand=scrollbar.set)
+    json_view = ScrolledText(json_frame, font=("Consolas", 11), wrap="none", **frame_opts) # tk.Text(json_frame, font=("Consolas", 11), wrap="none", yscrollcommand=scrollbar.set)
     json_view.pack(side="left", expand=True, fill="both")
 
     # Progress bar
-    progressbar = ttk.Progressbar(right_frame, mode="indeterminate", bootstyle="info-striped")
+    progressbar = tb.Progressbar(right_frame, mode="indeterminate", bootstyle="info-striped")
     progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
     progressbar.pack_forget()  # 초기에는 감추기
 
-    init_controllers(tree, json_view, notebook, root=root, progressbar=progressbar)
+    init_controllers(tree, json_view, notebook, root, progressbar=progressbar)
     root.mainloop()
     

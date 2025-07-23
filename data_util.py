@@ -1,8 +1,5 @@
 from json_util import make_cell_safe
 
-
-table_batch_dict = {}
-
 def normalize_row(row: dict | str | list, columns: list):
     if isinstance(row, dict):
         return [make_cell_safe(row.get(col)) for col in columns]

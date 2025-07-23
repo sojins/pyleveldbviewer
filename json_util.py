@@ -1,8 +1,8 @@
 import json
+from ttkbootstrap.scrolled import ScrolledText
 import re
 
-
-def highlight_keys_fast(text_widget):
+def highlight_keys_fast(text_widget: ScrolledText):
     text_widget.tag_configure("key", foreground="blue")
 
     # 전체 줄 수 가져오기

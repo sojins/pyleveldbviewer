@@ -1,16 +1,19 @@
 from threading import Thread
 import tkinter as tk
-from tkinter import messagebox
 from tkinter import ttk
-from tksheet import Sheet
+from tkinter import messagebox
 from tkinter import filedialog
+from tksheet import Sheet
+from ttkbootstrap.scrolled import ScrolledText
+
 from data_util import normalize_row
 from json_util import highlight_keys_fast, make_json_safe
-from leveldb_wrapper import LevelDBWrapper
+from leveldb_wrapper import LevelDBWrapper, entry_generator
+from controller_state import state
 
-CELL_TEXT_LIMIT = 256
+CELL_TEXT_LIMIT = 50
+PAGE_SIZE = 10
 
-table_batch_dict = {}
 ui = {}  # UI context 전역 dict
 cell_full_data = {}  # (row, col) → full string 저장용
 
@@ -20,28 +23,106 @@ def init_controllers(tree_widget, json_widget, notebook_widget, root, progressba
     ui["notebook"] = notebook_widget
     ui["root"] = root
     ui["progressbar"] = progressbar
+
     # TreeView 이벤트 바인딩
     ui["tree"].bind("<<TreeviewSelect>>", on_select)
 
-def make_cell_summary(value, row, col):
-    if isinstance(value, str) and len(value) > CELL_TEXT_LIMIT:
-        cell_full_data[(row, col)] = value
-        return value[:CELL_TEXT_LIMIT] + "…"
+def make_cell_summary(value, tab_index, row, col):
+    if not isinstance(value, str):
+        return value
+    
+    total_len = len(value)
+    
+    if total_len > CELL_TEXT_LIMIT:
+        cell_full_data.setdefault(tab_index,{})[(row, col)] = value
+        summary = value[:CELL_TEXT_LIMIT] + f"… (total: {total_len:,})"
+        return summary
+    
     return value
 
-def update_table_view(sheet, cols, rows):
+def update_table_view(sheet, cols, rows, tab_index=1):
     sheet.headers(cols)
-    cell_full_data.clear()
-
+    cell_full_data.get(tab_index, {}).clear() # cell_full_data.clear()
     summarized_rows = []
     for row_idx, row in enumerate(rows):
         summarized_row = []
         for col_idx, cell in enumerate(row):
-            summarized = make_cell_summary(cell, row_idx, col_idx)
+            summarized = make_cell_summary(cell, tab_index, row_idx, col_idx)
             summarized_row.append(summarized)
         summarized_rows.append(summarized_row)
 
     sheet.set_sheet_data(summarized_rows)
+
+# 다음/이전 페이지 요청 처리
+def show_batch_page(direction: str):
+    key = state.get_current_key()
+
+    gen = state.batch_generators.get(key)
+    if not gen:
+        print("⚠️ Generator not found")
+        return
+
+    page = state.batch_pages.get(key, 0)
+    cache = state.batch_cache.setdefault(key, [])
+
+    if direction == "next":
+        if page < len(cache):
+            batch = cache[page]
+        else:
+            try:
+                batch = next(gen)
+                cache.append(batch)
+            except StopIteration:
+                print("Reached end of data")
+                return
+        state.batch_pages[key] = page + 1
+
+    elif direction == "prev":
+        if page > 1:
+            state.batch_pages[key] = page - 1
+            batch = cache[page - 2]  # 이전 페이지 (0-indexed)
+        else:
+            print("At beginning")
+            return
+    else:
+        return
+
+    update_table_and_json(batch)
+    update_page_label()
+
+def update_table_and_json(batch):
+    schema_groups = {}
+    for item in batch:
+        schema = tuple(sorted(item.keys())) if isinstance(item, dict) else ("",)
+        schema_groups.setdefault(schema, []).append(item)
+    remove_tabs_and_cache()
+    for i, (schema, rows) in enumerate(schema_groups.items()):
+        create_table_tab(schema, rows, i)
+
+    json_view = ui["json_view"]
+    json_view.delete("1.0", "end")
+    json_view.insert("1.0", make_json_safe(batch))
+    highlight_keys_fast(json_view)
+
+def get_total_pages(tdm):
+    total_records = tdm.count_total()
+    total_pages = (total_records + PAGE_SIZE - 1) // PAGE_SIZE  # 올림
+    return total_pages
+
+def update_page_label():
+    key = state.get_current_key()
+    page = state.batch_pages.get(key, 1)
+
+    tdm = state.tdm_map.get(key)
+    total_pages = get_total_pages(tdm) if tdm else "?"
+    label = ""
+    if total_pages != '?': 
+        label = f"Page: {page} / {total_pages}"
+    state.page_label.config(text=label)
+
+    # 버튼 상태 조정
+    state.prev_btn["state"] = "normal" if page > 1 else "disabled"
+    state.next_btn["state"] = "normal" if isinstance(total_pages, int) and page < total_pages else "disabled"    
 
 def on_cell_double_click(event):
     mt = event.widget  # sheet.MT (MainTable)
@@ -49,13 +130,17 @@ def on_cell_double_click(event):
     
     col = mt.identify_col(event)
     row = mt.identify_row(event)
-    
     if row is None or col is None:
         return
 
+    # notebook은 sheet의 부모의 부모
+    notebook = sheet.master.master
+
+    # 현재 탭의 index
+    tab_index = notebook.index("current") - 1
     try:
         row_idx, col_idx = int(row), int(col)
-        full_value = cell_full_data.get((row_idx, col_idx))
+        full_value = cell_full_data.get(tab_index, {}).get((row_idx, col_idx),"")
 
         if full_value:
             show_cell_hex_popup(full_value)
@@ -80,6 +165,7 @@ def show_cell_popup(content, master=None):
     btn.pack(pady=5)
 
 def show_cell_hex_popup(content, master=None):
+    if not content: return
     popup = tk.Toplevel(master) if master else tk.Toplevel()
     popup.title("셀 상세 보기")
     popup.geometry("1300x600")
@@ -89,19 +175,14 @@ def show_cell_hex_popup(content, master=None):
     main_pane.pack(fill="both", expand=True)
 
     # ▶ 왼쪽 텍스트 영역
-    text_frame = ttk.Frame(main_pane)
-    text_scroll_y = tk.Scrollbar(text_frame, orient="vertical")
-    text_box = tk.Text(text_frame, font=("Consolas", 11), wrap="word",
-                       yscrollcommand=text_scroll_y.set)
-    text_scroll_y.config(command=text_box.yview)
-    text_scroll_y.pack(side="right", fill="y")
+    text_frame = ttk.Frame(main_pane, padding=0)
+    text_box = ScrolledText(text_frame, font=("Consolas", 11), wrap="word",)
     text_box.pack(side="left", fill="both", expand=True)
     text_box.insert("1.0", str(content))
-    text_box.config(state="disabled")
     main_pane.add(text_frame, weight=1)
 
     # ▶ 오른쪽 헥스 영역
-    hex_frame = ttk.Frame(main_pane)
+    hex_frame = ttk.Frame(main_pane, padding=0)
     hex_scroll_y = tk.Scrollbar(hex_frame, orient="vertical")
     hex_scroll_x = tk.Scrollbar(hex_frame, orient="horizontal")
     hex_box = tk.Text(hex_frame, font=("Consolas", 11),
@@ -169,24 +250,41 @@ def on_data_loaded(wrapper, db, file_path):
 
     # TreeView 구성
     delete_all_nodes(tree)
+    
+    tree.tag_configure("gray", foreground="gray")
+    tree.tag_configure("db", foreground='#222', font=("Segoe UI", 11))
+    tree.tag_configure("table", foreground='#666', font=("Segoe UI", 11))
     for db_name, tables in db.items():
-        db_node = tree.insert("", "end", text=db_name)
+        table_cnt = 0
         if isinstance(tables, dict):
             table_keys = tables.keys()
+            table_cnt = len(table_keys)
         else:
             table_keys = tables
+            table_cnt = len(table_keys)
+        db_node = tree.insert("", "end", text=f"📁{db_name} ({table_cnt})", tags="db")
         for table_name in table_keys:
             # table인 경우 values에 이름 저장
-            tree.insert(db_node, "end", text=f"{db_name}.{table_name}", values=(db_name, table_name))
+            tdm = LevelDBWrapper.TableDataManager(wrapper, db_name, table_name)
+            count = tdm.count_total()
+
+            key = f"{db_name}.{table_name}"
+            state.tdm_map[key] = tdm
+            
+            tag = "gray" if count == 0 else ""
+            tree.insert(db_node, "end", text=f"📄 {table_name} ({count})", 
+                        values=(db_name, table_name),
+                        tags=(tag,"table") if tag else {})
         
         # 폴더 경로 표시
         root_window = ui["root"]
         if root_window:
             root_window.title(f"LevelDB Viewer - {file_path}")
-    remove_tabs()
+    remove_tabs_and_cache()
     json_view = ui["json_view"]
     if json_view:
         json_view.delete("1.0", "end")       # 기존 내용 지우기
+    update_page_label()
 
 def select_log_dir(event=None, param=None):
     """
@@ -216,7 +314,7 @@ def select_log_dir(event=None, param=None):
             progressbar.pack_forget()
     Thread(target=task).start()
 
-def remove_tabs():
+def remove_tabs_and_cache():
     '''
     # 기존 탭 모두 제거
     '''
@@ -224,10 +322,10 @@ def remove_tabs():
     for tab_id in notebook.tabs():
         if tab_id.split('.')[-1] != '!frame':
             notebook.forget(tab_id)
+    cell_full_data.clear()
 
-def create_table_tab(schema: tuple, rows: list, index: int):
+def create_table_tab(schema: tuple, rows: list, tab_index: int):
     notebook = ui["notebook"]
-    # global notebook
     frame = tk.Frame(notebook)
     sheet = Sheet(frame, headers=list(schema))
     sheet.pack(fill="both", expand=True)
@@ -237,12 +335,20 @@ def create_table_tab(schema: tuple, rows: list, index: int):
     ))
 
     table_data = [normalize_row(row, list(schema)) for row in rows]
-    sheet.set_sheet_data(table_data)
+    # sheet.set_sheet_data(table_data)
+    update_table_view(sheet, cols=list(schema), rows=table_data, tab_index=tab_index)
 
     # 바인딩 등록
     sheet.bind("<Double-1>", on_cell_double_click)
-    notebook.add(frame, text=f"Table-{index+1}")
-    
+    notebook.add(frame, text=f"Table-{tab_index+1}")
+
+def reset_cache_if_key_changed(key: str):
+    if state.get_current_key() != key:
+        # clear cache
+        state.batch_generators[key] = None
+        state.batch_cache[key] = None
+        state.batch_pages[key] = 0
+    state.set_current_key(key)
                 
 # 선택 시 데이터 렌더링
 def on_select(event): 
@@ -255,7 +361,6 @@ def on_select(event):
     root = event.widget.master
     json_view = ui["json_view"]
     
-    text = tree.item(sel[0], "text")
     try:
         # values에서 조회하도록 변경 - '.' 이 포함된 dbname 지원
         db_name, table_name = tree.item(sel[0], "value")
@@ -268,6 +373,9 @@ def on_select(event):
         progressbar.pack(side="bottom", fill="x", padx=5, pady=3)
         progressbar.start(10)
     
+    key = f"{db_name}.{table_name}"
+    reset_cache_if_key_changed(key)
+
     def task():
         try:
             data = []
@@ -275,54 +383,35 @@ def on_select(event):
 
             # 1️⃣ 테이블 제너레이터 준비
             try:
-                gen = view_table_new_cb(root, wrapper, db_name, table_name)
+                gen = state.batch_generators.get(key)
+                if not gen:
+                    _entry = entry_generator(wrapper, db_name, table_name)
+                    gen = LevelDBWrapper()._make_batch_gen(_entry, 10)
+                    create_first_gen = True
             except Exception as e:
                 print(f"⚠️ Generation failed: {e}")
                 return
 
-            # 2️⃣ 배치 제너레이터 준비 (10개 단위)
+            # 2️⃣ 첫 배치 로드
             try:
-                if _batch_gen is None or table_batch_dict.get(text) is None:
-                    _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
-                    table_batch_dict[text] = _batch_gen
-                    create_first_gen = True
-            except NameError:
-                _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
-                table_batch_dict[text] = _batch_gen
-                create_first_gen = True
-
-            # 3️⃣ 첫 배치 로드
-            try:
-                batch = next(_batch_gen)
+                batch = next(gen)
+                state.batch_cache[key] = [batch] # 첫 페이지 저장
+                state.batch_generators[key] = gen
+                state.batch_pages[key] = 1
             except StopIteration:
                 if not create_first_gen:
                     try:
                         _batch_gen = LevelDBWrapper()._make_batch_gen(gen, 10)
-                        table_batch_dict[text] = _batch_gen
+                        state.batch_generators[key] = _batch_gen
                         batch = next(_batch_gen)
                     except StopIteration:
-                        raise ValueError("⚠️ No data!")
+                        batch = state.batch_cache[key]
                 else:
                     raise ValueError("⚠️ No data!")
-
-            # 4️⃣ 스키마별 그룹핑
-            schema_groups = {}
-            for item in batch:
-                data.append(item)
-                try:
-                    schema = tuple(sorted(item.keys()))
-                except Exception:
-                    schema = ('',)
-                schema_groups.setdefault(schema, []).append(item)
-
-            # 5️⃣ 기존 탭 제거 후 새 탭 생성
-            remove_tabs()
-            for i, (schema, rows) in enumerate(schema_groups.items()):
-                create_table_tab(schema, rows, i)
-
-            # 6️⃣ JSON 뷰어 갱신
-            pretty = make_json_safe(data)
-            json_view.after(0, lambda: update_json_view(json_view, pretty))
+            # 3️⃣ 스키마별 그룹핑
+            update_table_and_json(batch)
+            # 4️⃣ 페이지 번호 업데이트
+            update_page_label()
         except ValueError:
             print("⚠️ No data!")
             clear_tabs_and_jsonview()
@@ -334,22 +423,12 @@ def on_select(event):
             ))
 
     def clear_tabs_and_jsonview():
-        remove_tabs()
+        remove_tabs_and_cache()
         update_json_view(json_view, '')
 
-    def update_json_view(view, text):
+    def update_json_view(view: ScrolledText, text):
         view.delete("1.0", "end")
         view.insert("1.0", text)
         highlight_keys_fast(view)
 
     Thread(target=task).start()
-        
-def view_table_new_cb(root, wrapper, db_name=None, table_name=None):
-    if not db_name or not table_name:
-        return
-    
-    obj_store = wrapper[db_name][table_name]  # accessing object store using name
-    
-    record_iter = obj_store.iterate_records(errors_to_stdout=True)
-    batched_gen = (record.value for record in record_iter if record.value)
-    return batched_gen
