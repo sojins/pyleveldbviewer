@@ -70,7 +70,7 @@ def create_ui(root:tb.Window):
     tree_container.columnconfigure(0, weight=1)
 
     # 전체 왼쪽 프레임을 PanedWindow에 추가
-    main_pane.add(left_frame, minsize=150)  # 최소 너비 설정
+    main_pane.add(left_frame, minsize=300)  # 최소 너비 설정
 
     # 오른쪽 패널 - Notebook 등 기존 구성
     right_frame = tb.Frame(main_pane, **frame_opts)

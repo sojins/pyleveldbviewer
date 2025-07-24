@@ -3,14 +3,16 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from tkinter import filedialog
-from tksheet import Sheet
+from tksheet import Sheet, ColumnHeaders
 from ttkbootstrap.scrolled import ScrolledText
 
 from data_util import normalize_row
+from hexview.ui_hexview import show_large_cell_popup
 from json_util import highlight_keys_fast, make_json_safe
 from leveldb_wrapper import LevelDBWrapper, TableDataManager
 from controller_state import table, ui, cell_full_data
 from constants import PAGE_SIZE, CELL_TEXT_LIMIT
+from table_utils import auto_resize_all_columns, auto_resize_column
 
 
 
@@ -57,7 +59,7 @@ def render_table_page(sheet: Sheet, cols, rows, tab_index=1):
 
     # 요약 셀은 글자색을 파란색 강조 적용
     if summary_cells:
-        sheet.highlight_cells(cells=summary_cells, fg=("blue",))
+        sheet.highlight_cells(cells=summary_cells, fg=("#0080ff",))
 
 def show_batch_page(direction: str):
     ''' 이전/다음 페이지 요청 처리  (TableDataManager 기반)'''
@@ -131,15 +133,15 @@ def update_page_label():
     table.prev_btn["state"] = "normal" if current > 1 else "disabled"
     table.next_btn["state"] = "normal" if isinstance(total_pages, int) and current < max_page else "disabled"    
 
-def on_cell_double_click(event):
-    mt = event.widget  # sheet.MT (MainTable)
-    sheet = mt.master  # Sheet 객체
-    
-    col = mt.identify_col(event)
-    row = mt.identify_row(event)
-    if row is None or col is None:
-        return
+# 헤더 더블클릭 → 자동 열 너비 조정
+def on_header_double_click(sheet, col_index):
+    if col_index == 0:  # 첫 번째 열이면 전체 조정
+        auto_resize_all_columns(sheet)
+    else:
+        auto_resize_column(sheet, col_index)
 
+def on_cell_action(sheet, row, col):
+    print(f"(row,col) = ({row},{col})")
     # notebook은 sheet의 부모의 부모
     notebook = sheet.master.master
 
@@ -158,6 +160,52 @@ def on_cell_double_click(event):
     except Exception as e:
         print("Error in double click:", e)
 
+def on_enter_key(event):
+    mt = event.widget  # sheet.MT (MainTable)
+    sheet:Sheet = mt.master  # Sheet 객체
+
+    # 현재 선택된 셀 좌표 가져오기
+    try:
+        coords = sheet.get_currently_selected()
+        if coords:
+            col = coords.column
+            row = coords.row
+        else:
+            col = mt.identify_col(event)
+            row = mt.identify_row(event)
+        if row is None or col is None:
+            return
+        
+        
+        highlited = sheet.MT.current_cursor
+
+        # 더블클릭 처리 함수와 동일하게 동작하도록
+        on_cell_action(sheet, row, col)
+    except Exception as e:
+        print(f"Enter key error: {e}")
+
+def on_cell_double_click(event):
+    mt = event.widget  # sheet.MT (MainTable)
+    sheet = mt.master  # Sheet 객체
+
+    if isinstance(mt, ColumnHeaders):
+        try:
+            # 헤더에서 클릭된 열 인덱스를 추출
+            col_index = mt.MT.identify_col(event)
+            on_header_double_click(sheet, col_index)
+            return
+        except: pass
+    
+    try:
+        col = mt.identify_col(event)
+        row = mt.identify_row(event)
+        if row is None or col is None:
+            return
+    except AttributeError:
+        return
+    
+    on_cell_action(sheet, row, col)
+
 def show_cell_popup(content, master=None):
     popup = tk.Toplevel(master) if master else tk.Toplevel()
     popup.title("셀 내용 보기")
@@ -173,76 +221,9 @@ def show_cell_popup(content, master=None):
 
 def show_cell_hex_popup(content, master=None):
     if not content: return
-    popup = tk.Toplevel(master) if master else tk.Toplevel()
-    popup.title("셀 상세 보기")
-    popup.geometry("1300x600")
-
-    # ▶ 좌우 분할 PanedWindow
-    main_pane = ttk.PanedWindow(popup, orient=tk.HORIZONTAL)
-    main_pane.pack(fill="both", expand=True)
-
-    # ▶ 왼쪽 텍스트 영역
-    text_frame = ttk.Frame(main_pane, padding=0)
-    text_box = ScrolledText(text_frame, font=("Consolas", 11), wrap="word",)
-    text_box.pack(side="left", fill="both", expand=True)
-    text_box.insert("1.0", str(content))
-    main_pane.add(text_frame, weight=1)
-
-    # ▶ 오른쪽 헥스 영역
-    hex_frame = ttk.Frame(main_pane, padding=0)
-    hex_scroll_y = tk.Scrollbar(hex_frame, orient="vertical")
-    hex_scroll_x = tk.Scrollbar(hex_frame, orient="horizontal")
-    hex_box = tk.Text(hex_frame, font=("Consolas", 11),
-                      wrap="none",
-                      yscrollcommand=hex_scroll_y.set,
-                      xscrollcommand=hex_scroll_x.set)
-    hex_scroll_y.config(command=hex_box.yview)
-    hex_scroll_x.config(command=hex_box.xview)
-    hex_scroll_y.pack(side="right", fill="y")
-    hex_scroll_x.pack(side="bottom", fill="x")
-    hex_box.pack(side="left", fill="both", expand=True)
-
-    try:
-        if isinstance(content, bytes):
-            byte_content = content
-        else:
-            byte_content = str(content).encode("utf-8", errors="replace")
-
-        hex_lines = []
-        for i in range(0, len(byte_content), 16):
-            chunk = byte_content[i:i+16]
-            hex_part = ' '.join(f"{b:02X}" for b in chunk)
-            ascii_part = ''.join((chr(b) if 32 <= b < 127 else '.') for b in chunk)
-            hex_lines.append(f"{i:08X}  {hex_part:<48}  {ascii_part}")
-        hex_output = '\n'.join(hex_lines)
-
-        hex_box.config(state="normal")
-        hex_box.insert("1.0", hex_output)
-        hex_box.config(state="disabled")
-    except Exception as e:
-        hex_box.insert("1.0", f"[헥스 변환 실패]\n{e}")
-
-    main_pane.add(hex_frame, weight=1)
-
-    # ▶ 하단 버튼
-    btn_frame = ttk.Frame(popup)
-    btn_frame.pack(fill="x", pady=5)
-
-    def save_content():
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".bin",
-            filetypes=[("Binary/Text Files", "*.bin *.txt"), ("All Files", "*.*")]
-        )
-        if file_path:
-            try:
-                with open(file_path, "wb") as f:
-                    f.write(byte_content)
-                messagebox.showinfo("성공", f"저장 완료:\n{file_path}")
-            except Exception as e:
-                messagebox.showerror("오류", f"저장 실패:\n{e}")
-
-    tk.Button(btn_frame, text="내용 저장", command=save_content).pack(side="right", padx=10)
-    tk.Button(btn_frame, text="닫기", command=popup.destroy).pack(side="right")
+    total = len(content)
+    show_large_cell_popup(content, master)
+    return
 
 def delete_all_nodes(tree_obj):
     try:
@@ -334,15 +315,29 @@ def create_table_tab(schema: tuple, rows: list, tab_index: int):
     sheet = Sheet(frame, headers=list(schema))
     sheet.pack(fill="both", expand=True)
 
+    # 이벤트 바인딩 활성화
     sheet.enable_bindings((
-        "single_select", "cell_select", "column_width_resize", "cell_double_click"
+        "single_select", 
+        "cell_select", 
+        "arrowkeys",
+        "column_width_resize", "cell_double_click",
+        "row_height_resize", "double_click_column_resize", "header_double_click"
     ))
 
+    # 데이터 표시
     table_data = [normalize_row(row, list(schema)) for row in rows]
     render_table_page(sheet, cols=list(schema), rows=table_data, tab_index=tab_index)
 
-    # 바인딩 등록
+    # 셀 더블클릭 (텍스트/Hex 보기)
     sheet.bind("<Double-1>", on_cell_double_click)
+    sheet.bind("<Return>", on_enter_key)
+
+    # 헤더 더블클릭
+    sheet.extra_bindings([
+        ("header_double_click", on_header_double_click)
+    ])
+
+    # 탭 추가
     notebook.add(frame, text=f"Table-{tab_index+1}")
                 
 def on_select(event): 
