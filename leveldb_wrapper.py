@@ -10,7 +10,7 @@ def entry_generator(db : WrappedIndexDB, db_name: str, table_name: str, count_kn
     
     obj_store = db[db_name][table_name]  # accessing object store using name
     if count_known:
-        record_iter = obj_store.iterate_records(errors_to_stdout=False)
+        record_iter = obj_store.iterate_records(errors_to_stdout=True)
 
         for record in record_iter:
             if record.value:
